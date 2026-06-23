@@ -4,11 +4,82 @@
 
 ## 功能特性
 
-- **文档解析**: 基于 MinerU 的高精度文档解析，支持 PDF/Word/Excel，中文友好
-- **RAG 检索**: 上传需求文档，向量化存储，语义检索相关片段
-- **Agent 生成**: ReAct 模式 Agent，自动拆解功能点并生成测试用例
-- **LLM Judge**: 5 维评分（完整性/清晰度/正确性/覆盖度/优先级），低分自动重生成
-- **多类型覆盖**: functional / boundary / exception / negative 四种用例类型
+### ReAct Agent
+
+采用 LangChain 的 ReAct（Reasoning + Acting）范式，Agent 严格遵循 **思考 → 行动 → 观察 → 再思考** 循环：
+
+```
+用户需求 → 思考(理解意图) → 行动(调用工具) → 观察(获取结果) → 思考(决策) → ... → 输出
+```
+
+每轮只允许调用一个工具，确保推理过程可控、可追溯。
+
+### 自定义 Tools
+
+为测试用例场景定制 5 个专用工具：
+
+| 工具 | 功能 |
+|------|------|
+| `retrieve_requirement` | RAG 语义检索需求文档 |
+| `analyze_requirement_points` | LLM 拆解需求为可测功能点 |
+| `generate_test_case` | 生成单条测试用例（内置 Judge 评分 + 低分重生成） |
+| `save_test_cases` | 批量持久化到 PostgreSQL |
+| `list_existing_cases` | 查询已有用例，避免重复生成 |
+
+### LLM Judge 评分体系
+
+LangGraph 驱动的 **生成 → 评分 → 重生成** 状态机：
+
+```
+START ──► generate ──► judge ──┐
+                           ▲    │
+                           │    ├─ passed or attempt>=max ─► END
+                           │    │
+                       regenerate ◄──┘
+```
+
+5 维评分（各 1-5 分，满分 25，合格线 18）：
+- **completeness**: 前置条件/步骤/预期是否齐全
+- **clarity**: 步骤是否可直接执行
+- **correctness**: 是否与需求一致
+- **coverage**: 是否体现指定 case_type 测试意图
+- **priority**: 优先级设置是否合理
+
+### 多轮对话记忆
+
+基于 PostgreSQL 持久化的 `PostgresChatMessageHistory`，支持跨会话的多轮对话：
+- 每轮对话自动存储到 `chat_messages` 表
+- Agent 可引用历史上下文继续生成用例
+- 支持会话管理（创建/查询/清空）
+
+### Agent Harness（可观测性 + 运行时护栏）
+
+通过 Middleware 机制实现 Agent 行为控制与观测：
+
+```python
+@before_agent    # 生命周期钩子：敏感词拦截
+@wrap_model_call # LLM 调用计时
+@wrap_tool_call  # 工具调用护栏：单次保存上限 50 条
+@after_agent     # 统计工具调用次数
+```
+
+- **输入护栏**: 拦截 `drop table`、`删除所有用例` 等危险指令
+- **输出护栏**: `save_test_cases` 单次最多 50 条，防止误操作
+- **LangSmith 集成**: 可选开启 LangSmith tracing，追踪完整调用链路
+
+### 文档解析与 RAG
+
+- **MinerU**: 高精度文档解析，支持 PDF/Word/Excel，中文优化
+- **ChromaDB**: 向量存储，语义检索相关需求片段
+- **文本分割**: 可配置 chunk_size / chunk_overlap
+
+### RESTful API
+
+基于 FastAPI 构建，遵循 REST 规范：
+- 自动生成 OpenAPI 文档（Swagger UI）
+- Pydantic 请求/响应校验
+- 统一异常处理与错误码
+- CORS 中间件支持跨域
 
 ## 技术栈
 
